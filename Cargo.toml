@@ -1,5 +1,5 @@
 [package]
-name = "hamster"
+name = "gitlab_ci_parser"
 version = "0.0.1"
 authors = ["Giles Cope <gilescope@gmail.com>"]
 edition = "2018"
