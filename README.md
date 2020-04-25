@@ -9,5 +9,6 @@ PRs wellcome - currently it only parses what I need.
 
   * .extends is now supported.
   * yaml merge << and anchors should work.
+  * remote includes are assumed to be checked out in a sister directory.
 
 Dual licensed: MIT + Apache 2.

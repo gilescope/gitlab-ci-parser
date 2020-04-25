@@ -27,6 +27,9 @@ pub struct Job {
 }
 
 pub struct GitlabCIConfig {
+    /// Resolved inclusions preserving order.
+    pub include: Vec<GitlabCIConfig>,
+
     /// Global variables
     pub variables: HashMap<VarName, VarValue>,
 
@@ -35,6 +38,49 @@ pub struct GitlabCIConfig {
 
     /// Targets that gitlab can run.
     pub jobs: HashMap<JobName, Rc<Job>>,
+}
+
+fn parse_includes(include: &Value) -> Vec<GitlabCIConfig> {
+    let mut results = vec![];
+    match include {
+        Value::String(include_filename) => {
+            if let Ok(result) = parse(&Path::new(&include_filename)) {
+                results.push(result);
+            }
+        }
+        Value::Sequence(includes) => {
+            for include in includes {
+                parse_includes(include);
+            }
+        }
+        Value::Mapping(map) => {
+            if let Some(Value::String(local)) = map.get(&Value::String("local".to_owned())) {
+                if let Ok(result) = parse(&Path::new(local)) {
+                    results.push(result);
+                }
+            } else if let Some(Value::String(project)) =
+                map.get(&Value::String("project".to_owned()))
+            {
+                // We assume that the included project is checked out in a sister directory.
+                let parts = project.split('/');
+                let project_name = parts.into_iter().last().unwrap();
+
+                if let Value::String(file) = map
+                    .get(&Value::String("file".to_owned()))
+                    .unwrap_or(&Value::String(".gitlab-ci.yml".to_owned()))
+                {
+                    let path = Path::new("..")
+                        .join(Path::new(project_name))
+                        .join(Path::new(file));
+                    if let Ok(result) = parse(&path) {
+                        results.push(result);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    results
 }
 
 ///
@@ -47,12 +93,17 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
 
     let val: serde_yaml::Value = merge_keys_serde(raw_yaml).unwrap();
     let mut config = GitlabCIConfig {
+        include: Vec::new(),
         stages: Vec::new(),
         variables: HashMap::new(),
         jobs: HashMap::new(),
     };
 
     if let serde_yaml::Value::Mapping(map) = val {
+        if let Some(includes) = map.get(&Value::String("include".to_owned())) {
+            config.include = parse_includes(includes);
+        }
+
         for (k, v) in map.iter() {
             if let Value::String(key) = k {
                 if !config.jobs.contains_key(key) {
@@ -127,6 +178,16 @@ pub mod tests {
             .as_ref()
             .unwrap()
             .contains_key("AN_INHERITED_VARIABLE"));
+        Ok(())
+    }
+
+    #[test]
+    pub fn parse_include() -> Result<(), DynErr> {
+        let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+        let p = &PathBuf::from(Path::join(&root, ".gitlab-ci.yml"));
+        let config = parse(p)?;
+        assert_eq!(config.include.len(), 1);
+
         Ok(())
     }
 }
