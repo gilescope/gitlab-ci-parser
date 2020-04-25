@@ -1,0 +1,16 @@
+[package]
+name = "hamster"
+version = "0.0.1"
+authors = ["Giles Cope <gilescope@gmail.com>"]
+edition = "2018"
+
+[lib]
+name = "gitlab_ci_parser"
+path = "src/lib.rs"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde_yaml = { version="*", default_features=false }
+serde_derive = { version="*", default_features=false }
+serde = { version="*", default_features=false }
+yaml-merge-keys = {version="*", features=["serde_yaml"]}
