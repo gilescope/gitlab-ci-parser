@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use yaml_merge_keys::merge_keys_serde;
-type DynErr = Box<dyn std::error::Error + 'static>;
+pub type DynErr = Box<dyn std::error::Error + 'static>;
 
 pub type StageName = String;
 pub type JobName = String;
