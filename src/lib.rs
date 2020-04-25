@@ -16,14 +16,14 @@ pub type Script = String;
 /// All Jobs in the same stage tend to be run at once.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Job {
-    stage: Option<StageName>,
-    before_script: Option<Vec<Script>>,
-    script: Option<Vec<Script>>,
-    variables: Option<HashMap<VarName, VarValue>>,
-    extends: Option<JobName>,
+    pub stage: Option<StageName>,
+    pub before_script: Option<Vec<Script>>,
+    pub script: Option<Vec<Script>>,
+    pub variables: Option<HashMap<VarName, VarValue>>,
+    pub extends: Option<JobName>,
 
     #[serde(skip)]
-    extends_job: Option<Rc<Job>>,
+    pub extends_job: Option<Rc<Job>>,
 }
 
 pub struct GitlabCIConfig {
@@ -56,8 +56,8 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
         for (k, v) in map.iter() {
             if let Value::String(key) = k {
                 if !config.jobs.contains_key(key) {
-                    match key.as_ref() {
-                        "variables" => {
+                    match (key.as_ref(), v) {
+                        ("variables", _) => {
                             let global_var_map: Mapping = serde_yaml::from_value(v.clone())?;
                             for (key, value) in global_var_map {
                                 if let (Value::String(key), Value::String(value)) = (key, value) {
@@ -65,16 +65,14 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
                                 }
                             }
                         }
-                        "stages" => {
-                            if let Value::Sequence(seq) = v {
-                                for stage in seq {
-                                    if let Value::String(stage_name) = stage {
-                                        config.stages.push(stage_name.to_owned());
-                                    }
+                        ("stages", Value::Sequence(seq)) => {
+                            for stage in seq {
+                                if let Value::String(stage_name) = stage {
+                                    config.stages.push(stage_name.to_owned());
                                 }
                             }
                         }
-                        k => {
+                        (k, _) => {
                             parse_job(&mut config, k, &map);
                         }
                     };
