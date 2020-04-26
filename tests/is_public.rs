@@ -2,7 +2,7 @@ use gitlab_ci_parser::*;
 
 #[test]
 pub fn test() {
-    let j = Job {
+    let _j = Job {
         before_script: None,
         script: None,
         extends: None,

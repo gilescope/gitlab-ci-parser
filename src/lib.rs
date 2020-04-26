@@ -1,10 +1,10 @@
-#[macro_use]
-extern crate serde_derive;
+use serde_derive::*;
 use serde_yaml::{Mapping, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use yaml_merge_keys::merge_keys_serde;
+
 pub type DynErr = Box<dyn std::error::Error + 'static>;
 
 pub type StageName = String;
@@ -19,7 +19,12 @@ pub struct Job {
     pub stage: Option<StageName>,
     pub before_script: Option<Vec<Script>>,
     pub script: Option<Vec<Script>>,
+
+    /// Even though variables could be None,
+    /// they could be defined in extends_job.variables
+    /// (or globally)
     pub variables: Option<HashMap<VarName, VarValue>>,
+
     pub extends: Option<JobName>,
 
     #[serde(skip)]
@@ -27,8 +32,8 @@ pub struct Job {
 }
 
 pub struct GitlabCIConfig {
-    /// Resolved inclusions preserving order.
-    pub include: Vec<GitlabCIConfig>,
+    /// Based on include orderings, what's the parent of this gitlab config.
+    pub parent: Option<Box<GitlabCIConfig>>,
 
     /// Global variables
     pub variables: HashMap<VarName, VarValue>,
@@ -40,47 +45,54 @@ pub struct GitlabCIConfig {
     pub jobs: HashMap<JobName, Rc<Job>>,
 }
 
-fn parse_includes(include: &Value) -> Vec<GitlabCIConfig> {
-    let mut results = vec![];
+fn parse_includes(
+    context: &Path,
+    include: &Value,
+    parent: Option<GitlabCIConfig>,
+) -> Option<GitlabCIConfig> {
     match include {
         Value::String(include_filename) => {
-            if let Ok(result) = parse(&Path::new(&include_filename)) {
-                results.push(result);
-            }
+            // Remove leading '/' - join (correctly) won't concat them if filename starts from root.
+            let include_filename = context.join(&include_filename[1..]);
+            parse_aux(&context.join(&Path::new(&include_filename)), parent).ok()
         }
         Value::Sequence(includes) => {
+            let mut parent = parent;
             for include in includes {
-                parse_includes(include);
+                parent = parse_includes(context, include, parent);
             }
+            parent
         }
         Value::Mapping(map) => {
             if let Some(Value::String(local)) = map.get(&Value::String("local".to_owned())) {
-                if let Ok(result) = parse(&Path::new(local)) {
-                    results.push(result);
-                }
+                let local = context.join(local);
+                parse_aux(&local, parent).ok()
             } else if let Some(Value::String(project)) =
                 map.get(&Value::String("project".to_owned()))
             {
                 // We assume that the included project is checked out in a sister directory.
                 let parts = project.split('/');
-                let project_name = parts.into_iter().last().unwrap();
+                let project_name = parts.last().unwrap();
 
                 if let Value::String(file) = map
                     .get(&Value::String("file".to_owned()))
                     .unwrap_or(&Value::String(".gitlab-ci.yml".to_owned()))
                 {
-                    let path = Path::new("..")
-                        .join(Path::new(project_name))
-                        .join(Path::new(file));
-                    if let Ok(result) = parse(&path) {
-                        results.push(result);
-                    }
+                    let path = context.join(
+                        Path::new("..")
+                            .join(Path::new(project_name))
+                            .join(Path::new(file)),
+                    );
+                    parse_aux(&path, parent).ok()
+                } else {
+                    None
                 }
+            } else {
+                None
             }
         }
-        _ => {}
+        _ => None,
     }
-    results
 }
 
 ///
@@ -88,12 +100,17 @@ fn parse_includes(include: &Value) -> Vec<GitlabCIConfig> {
 /// Anything unknown will be silently skipped. Jobs will be linked up with their parents.
 ///
 pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
+    parse_aux(gitlab_file, None)
+}
+
+fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<GitlabCIConfig, DynErr> {
+    //println!("Attempting to open {:?}", gitlab_file);
     let f = std::fs::File::open(&gitlab_file)?;
     let raw_yaml = serde_yaml::from_reader(f)?;
 
     let val: serde_yaml::Value = merge_keys_serde(raw_yaml).unwrap();
     let mut config = GitlabCIConfig {
-        include: Vec::new(),
+        parent: None,
         stages: Vec::new(),
         variables: HashMap::new(),
         jobs: HashMap::new(),
@@ -101,7 +118,8 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
 
     if let serde_yaml::Value::Mapping(map) = val {
         if let Some(includes) = map.get(&Value::String("include".to_owned())) {
-            config.include = parse_includes(includes);
+            config.parent =
+                parse_includes(gitlab_file.parent().unwrap(), includes, parent).map(Box::new);
         }
 
         for (k, v) in map.iter() {
@@ -124,7 +142,10 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
                             }
                         }
                         (k, _) => {
-                            parse_job(&mut config, k, &map);
+                            let job_def = parse_job(&config, k, &map);
+                            if let Ok(job) = job_def {
+                                config.jobs.insert(k.to_owned(), job);
+                            }
                         }
                     };
                 }
@@ -135,16 +156,34 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
     Ok(config)
 }
 
-fn parse_job(mut config: &mut GitlabCIConfig, job_name: &str, top: &Mapping) {
+fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<Rc<Job>, DynErr> {
     let job_nm = Value::String(job_name.to_owned());
     let j: Result<Job, _> = serde_yaml::from_value(top.get(&job_nm).unwrap().clone());
     if let Ok(mut j) = j {
         if let Some(ref parent_job_name) = j.extends {
             // Parse parents first so we don't get wicked fun with Rc<>...
-            parse_job(&mut config, parent_job_name, top);
-            j.extends_job = Some(config.jobs.get(parent_job_name).unwrap().clone());
+
+            let job: Option<Rc<Job>> = if job_name != parent_job_name
+                && top.contains_key(&Value::String(parent_job_name.clone()))
+            {
+                parse_job(config, parent_job_name, top).ok()
+            } else {
+                let mut parent = config.parent.as_ref();
+                let mut result = None;
+                while parent.is_some() {
+                    result = parse_job(parent.unwrap(), parent_job_name, top).ok();
+                    if result.is_some() {
+                        break;
+                    }
+                    parent = parent.unwrap().parent.as_ref();
+                }
+                result
+            };
+            j.extends_job = job;
         }
-        config.jobs.insert(job_name.to_owned(), Rc::new(j));
+        Ok(Rc::new(j)) //TODO: maybe push rc outside here
+    } else {
+        Err(Box::new(j.unwrap_err()))
     }
 }
 
@@ -155,9 +194,14 @@ pub mod tests {
 
     #[test]
     pub fn parse_example() -> Result<(), DynErr> {
-        let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-        let p = &PathBuf::from(Path::join(&root, "examples/simple/.gitlab-ci.yml"));
-        let config = parse(p)?;
+        let example_file: PathBuf = PathBuf::from(file!())
+            .parent()
+            .unwrap()
+            .join("../examples/simple/.gitlab-ci.yml");
+
+        // let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+        // let p = &PathBuf::from(Path::join(&root, "examples/simple/.gitlab-ci.yml"));
+        let config = parse(&example_file)?;
         assert_eq!(
             config.variables["GLOBAL_VAR"],
             "this GLOBAL_VAR should mostly always be set.",
@@ -183,10 +227,13 @@ pub mod tests {
 
     #[test]
     pub fn parse_include() -> Result<(), DynErr> {
-        let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-        let p = &PathBuf::from(Path::join(&root, ".gitlab-ci.yml"));
-        let config = parse(p)?;
-        assert_eq!(config.include.len(), 1);
+        let example_file: PathBuf = PathBuf::from(file!())
+            .parent()
+            .unwrap()
+            .join("../.gitlab-ci.yml");
+
+        let config = parse(&example_file)?;
+        assert!(config.parent.is_some());
 
         Ok(())
     }
