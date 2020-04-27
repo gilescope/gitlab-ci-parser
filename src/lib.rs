@@ -3,6 +3,7 @@ use serde_yaml::{Mapping, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use tracing::info;
 use yaml_merge_keys::merge_keys_serde;
 
 pub type DynErr = Box<dyn std::error::Error + 'static>;
@@ -31,6 +32,7 @@ pub struct Job {
     pub extends_job: Option<Rc<Job>>,
 }
 
+#[derive(Debug)]
 pub struct GitlabCIConfig {
     /// Based on include orderings, what's the parent of this gitlab config.
     pub parent: Option<Box<GitlabCIConfig>>,
@@ -45,6 +47,7 @@ pub struct GitlabCIConfig {
     pub jobs: HashMap<JobName, Rc<Job>>,
 }
 
+#[tracing::instrument]
 fn parse_includes(
     context: &Path,
     include: &Value,
@@ -103,8 +106,9 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
     parse_aux(gitlab_file, None)
 }
 
+#[tracing::instrument]
 fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<GitlabCIConfig, DynErr> {
-    //println!("Attempting to open {:?}", gitlab_file);
+    info!("Parsing file {:?}", gitlab_file);
     let f = std::fs::File::open(&gitlab_file)?;
     let raw_yaml = serde_yaml::from_reader(f)?;
 
@@ -117,6 +121,8 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
     };
 
     if let serde_yaml::Value::Mapping(map) = val {
+        info!("Parsing succesful.");
+
         if let Some(includes) = map.get(&Value::String("include".to_owned())) {
             config.parent = parse_includes(
                 gitlab_file
@@ -127,6 +133,8 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
             )
             .map(Box::new);
         }
+
+        info!("All includes loaded.");
 
         for (k, v) in map.iter() {
             if let Value::String(key) = k {
@@ -162,6 +170,7 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
     Ok(config)
 }
 
+#[tracing::instrument]
 fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<Rc<Job>, DynErr> {
     let job_nm = Value::String(job_name.to_owned());
     let j: Result<Job, _> = serde_yaml::from_value(
