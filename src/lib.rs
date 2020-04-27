@@ -166,7 +166,10 @@ fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<R
     let job_nm = Value::String(job_name.to_owned());
     let j: Result<Job, _> = serde_yaml::from_value(
         top.get(&job_nm)
-            .expect("job asked to be parsed but not found")
+            .expect(&format!(
+                "job asked to be parsed but not found: {}",
+                job_name
+            ))
             .clone(),
     );
     if let Ok(mut j) = j {
