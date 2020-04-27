@@ -32,6 +32,26 @@ pub struct Job {
     pub extends_job: Option<Rc<Job>>,
 }
 
+impl Job {
+    /// Returns the consolidated local variables based on all extends.
+    pub fn get_merged_variables(&self) -> HashMap<String, String> {
+        let mut results = HashMap::new();
+        self.calculate_variables(&mut results);
+        results
+    }
+
+    fn calculate_variables(&self, mut variables: &mut HashMap<String,String>) {
+        if let Some(ref parent) = self.extends_job {
+            parent.calculate_variables(&mut variables);
+        }
+        if let Some(ref var) = self.variables {
+            for (k,v) in var.iter() {
+                variables.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct GitlabCIConfig {
     /// Based on include orderings, what's the parent of this gitlab config.
@@ -45,6 +65,22 @@ pub struct GitlabCIConfig {
 
     /// Targets that gitlab can run.
     pub jobs: HashMap<JobName, Rc<Job>>,
+}
+
+impl GitlabCIConfig {
+    /// Returns the consolidated global variables based on all imports.
+    pub fn get_merged_variables(&self) -> HashMap<String, String> {
+        let mut results = HashMap::new();
+        self.calculate_variables(&mut results);
+        results
+    }
+
+    fn calculate_variables(&self, mut variables: &mut HashMap<String,String>) {
+        if let Some(ref parent) = self.parent {
+            parent.calculate_variables(&mut variables);
+        }
+        variables.extend(self.variables.clone());
+    }
 }
 
 #[tracing::instrument]
@@ -262,6 +298,18 @@ pub mod tests {
         let config = parse(&example_file)?;
         assert!(config.parent.is_some());
 
+        Ok(())
+    }
+
+    #[test]
+    pub fn consolidated_global_vars() -> Result<(), DynErr> {
+        let example_file: PathBuf = PathBuf::from(file!())
+            .parent()
+            .unwrap()
+            .join("../examples/simple/.gitlab-ci.yml");
+        let config = parse(&example_file)?;
+        let vars = config.get_merged_variables();
+        assert!(vars.contains_key("GLOBAL_VAR"));
         Ok(())
     }
 }
