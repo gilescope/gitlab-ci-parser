@@ -72,7 +72,7 @@ fn parse_includes(
             {
                 // We assume that the included project is checked out in a sister directory.
                 let parts = project.split('/');
-                let project_name = parts.last().unwrap();
+                let project_name = parts.last().expect("project name should contain '/'");
 
                 if let Value::String(file) = map
                     .get(&Value::String("file".to_owned()))
@@ -108,7 +108,7 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
     let f = std::fs::File::open(&gitlab_file)?;
     let raw_yaml = serde_yaml::from_reader(f)?;
 
-    let val: serde_yaml::Value = merge_keys_serde(raw_yaml).unwrap();
+    let val: serde_yaml::Value = merge_keys_serde(raw_yaml).expect("Couldn't merge yaml :<<");
     let mut config = GitlabCIConfig {
         parent: None,
         stages: Vec::new(),
@@ -118,8 +118,14 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
 
     if let serde_yaml::Value::Mapping(map) = val {
         if let Some(includes) = map.get(&Value::String("include".to_owned())) {
-            config.parent =
-                parse_includes(gitlab_file.parent().unwrap(), includes, parent).map(Box::new);
+            config.parent = parse_includes(
+                gitlab_file
+                    .parent()
+                    .expect("gitlab-ci file wasn't in a dir??"),
+                includes,
+                parent,
+            )
+            .map(Box::new);
         }
 
         for (k, v) in map.iter() {
@@ -158,7 +164,11 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
 
 fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<Rc<Job>, DynErr> {
     let job_nm = Value::String(job_name.to_owned());
-    let j: Result<Job, _> = serde_yaml::from_value(top.get(&job_nm).unwrap().clone());
+    let j: Result<Job, _> = serde_yaml::from_value(
+        top.get(&job_nm)
+            .expect("job asked to be parsed but not found")
+            .clone(),
+    );
     if let Ok(mut j) = j {
         if let Some(ref parent_job_name) = j.extends {
             // Parse parents first so we don't get wicked fun with Rc<>...
@@ -171,11 +181,16 @@ fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<R
                 let mut parent = config.parent.as_ref();
                 let mut result = None;
                 while parent.is_some() {
-                    result = parse_job(parent.unwrap(), parent_job_name, top).ok();
+                    result = parse_job(
+                        parent.expect("gitlab-ci file has no parent dir???"),
+                        parent_job_name,
+                        top,
+                    )
+                    .ok();
                     if result.is_some() {
                         break;
                     }
-                    parent = parent.unwrap().parent.as_ref();
+                    parent = parent.expect("can't happen").parent.as_ref();
                 }
                 result
             };
