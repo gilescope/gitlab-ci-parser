@@ -1,11 +1,11 @@
 [package]
 name = "gitlab_ci_parser"
-version = "0.0.3"
+version = "0.0.4"
 description = "A parser for .gitlab-ci.yml file format"
 authors = ["Giles Cope <gilescope@gmail.com>"]
 edition = "2018"
 readme = "README.md"
-repository = "https://github.com/gilescope/hitlab_ci_parser"
+repository = "https://github.com/gilescope/gitlab-ci-parser.git"
 license = "MIT OR Apache-2.0"
 keywords = ["gitlab", "parser", "ci"]
 categories = ["development-tools::build-utils"]
