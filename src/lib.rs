@@ -1,6 +1,6 @@
 use serde_derive::*;
 use serde_yaml::{Mapping, Value};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tracing::{debug, info};
@@ -24,7 +24,7 @@ pub struct Job {
     /// Even though variables could be None,
     /// they could be defined in extends_job.variables
     /// (or globally)
-    pub variables: Option<HashMap<VarName, VarValue>>,
+    pub variables: Option<BTreeMap<VarName, VarValue>>,
 
     pub extends: Option<JobName>,
 
@@ -34,13 +34,13 @@ pub struct Job {
 
 impl Job {
     /// Returns the consolidated local variables based on all extends.
-    pub fn get_merged_variables(&self) -> HashMap<String, String> {
-        let mut results = HashMap::new();
+    pub fn get_merged_variables(&self) -> BTreeMap<String, String> {
+        let mut results = BTreeMap::new();
         self.calculate_variables(&mut results);
         results
     }
 
-    fn calculate_variables(&self, mut variables: &mut HashMap<String, String>) {
+    fn calculate_variables(&self, mut variables: &mut BTreeMap<String, String>) {
         if let Some(ref parent) = self.extends_job {
             parent.calculate_variables(&mut variables);
         }
@@ -60,19 +60,19 @@ pub struct GitlabCIConfig {
     pub parent: Option<Box<GitlabCIConfig>>,
 
     /// Global variables
-    pub variables: HashMap<VarName, VarValue>,
+    pub variables: BTreeMap<VarName, VarValue>,
 
     /// Stages group jobs that run in parallel. The ordering is important
     pub stages: Vec<StageName>,
 
     /// Targets that gitlab can run.
-    pub jobs: HashMap<JobName, Rc<Job>>,
+    pub jobs: BTreeMap<JobName, Rc<Job>>,
 }
 
 impl GitlabCIConfig {
     /// Returns the consolidated global variables based on all imports.
-    pub fn get_merged_variables(&self) -> HashMap<String, String> {
-        let mut results = HashMap::new();
+    pub fn get_merged_variables(&self) -> BTreeMap<String, String> {
+        let mut results = BTreeMap::new();
         self.calculate_variables(&mut results);
         results
     }
@@ -89,7 +89,7 @@ impl GitlabCIConfig {
         }
     }
 
-    fn calculate_variables(&self, mut variables: &mut HashMap<String, String>) {
+    fn calculate_variables(&self, mut variables: &mut BTreeMap<String, String>) {
         if let Some(ref parent) = self.parent {
             parent.calculate_variables(&mut variables);
         }
@@ -172,8 +172,8 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
         file: gitlab_file.to_path_buf(),
         parent: None,
         stages: Vec::new(),
-        variables: HashMap::new(),
-        jobs: HashMap::new(),
+        variables: BTreeMap::new(),
+        jobs: BTreeMap::new(),
     };
 
     if let serde_yaml::Value::Mapping(map) = val {
@@ -249,21 +249,6 @@ fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<R
                     parse_job(config, parent_job_name, top).ok()
                 } else {
                     config.lookup_job(parent_job_name)
-                    // let mut parent = config.parent.as_ref();
-                    // let mut result = None;
-                    // while parent.is_some() {
-                    //     result = parse_job(
-                    //         parent.expect("gitlab-ci file has no parent dir???"),
-                    //         parent_job_name,
-                    //         top,
-                    //     )
-                    //     .ok();
-                    //     if result.is_some() {
-                    //         break;
-                    //     }
-                    //     parent = parent.expect("can't happen").parent.as_ref();
-                    // }
-                    // result
                 };
                 j.extends_job = job;
             }
