@@ -1,6 +1,6 @@
 include: "/examples/simple/.gitlab-ci.yml"
 
 print_goodbye:
-  extends: print_goodbye
+  extends: "print_goodbye"
   variables:
     GOODBYE: "cya l8er"
