@@ -1,0 +1,16 @@
+# This is the parent order for the includes:
+# - simple.yml
+#   - e.yml
+#     - d.yml
+#       - b.yml
+#         - d.yml
+#           - c.yml
+#             - a.yml
+# a is at the bottom with parents alll the way up to simple...
+
+include:
+  - local: b.yml
+  - local: c.yml
+
+variables:
+  A: "SET"

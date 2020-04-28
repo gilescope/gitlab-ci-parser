@@ -1,9 +1,9 @@
 use serde_derive::*;
 use serde_yaml::{Mapping, Value};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tracing::info;
+use tracing::{debug, info};
 use yaml_merge_keys::merge_keys_serde;
 
 pub type DynErr = Box<dyn std::error::Error + 'static>;
@@ -40,12 +40,12 @@ impl Job {
         results
     }
 
-    fn calculate_variables(&self, mut variables: &mut HashMap<String,String>) {
+    fn calculate_variables(&self, mut variables: &mut HashMap<String, String>) {
         if let Some(ref parent) = self.extends_job {
             parent.calculate_variables(&mut variables);
         }
         if let Some(ref var) = self.variables {
-            for (k,v) in var.iter() {
+            for (k, v) in var.iter() {
                 variables.insert(k.clone(), v.clone());
             }
         }
@@ -54,6 +54,8 @@ impl Job {
 
 #[derive(Debug)]
 pub struct GitlabCIConfig {
+    pub file: PathBuf,
+
     /// Based on include orderings, what's the parent of this gitlab config.
     pub parent: Option<Box<GitlabCIConfig>>,
 
@@ -75,7 +77,7 @@ impl GitlabCIConfig {
         results
     }
 
-    fn calculate_variables(&self, mut variables: &mut HashMap<String,String>) {
+    fn calculate_variables(&self, mut variables: &mut HashMap<String, String>) {
         if let Some(ref parent) = self.parent {
             parent.calculate_variables(&mut variables);
         }
@@ -83,7 +85,7 @@ impl GitlabCIConfig {
     }
 }
 
-#[tracing::instrument]
+//#[tracing::instrument]
 fn parse_includes(
     context: &Path,
     include: &Value,
@@ -99,6 +101,7 @@ fn parse_includes(
             let mut parent = parent;
             for include in includes {
                 parent = parse_includes(context, include, parent);
+                debug!("parent returned {:?}", parent.as_ref().unwrap().file);
             }
             parent
         }
@@ -124,13 +127,13 @@ fn parse_includes(
                     );
                     parse_aux(&path, parent).ok()
                 } else {
-                    None
+                    parent
                 }
             } else {
-                None
+                parent
             }
         }
-        _ => None,
+        _ => parent,
     }
 }
 
@@ -142,14 +145,19 @@ pub fn parse(gitlab_file: &Path) -> Result<GitlabCIConfig, DynErr> {
     parse_aux(gitlab_file, None)
 }
 
-#[tracing::instrument]
+//#[tracing::instrument]
 fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<GitlabCIConfig, DynErr> {
-    info!("Parsing file {:?}", gitlab_file);
+    debug!(
+        "Parsing file {:?}, parent: {:?}",
+        gitlab_file,
+        parent.as_ref().map(|c| c.file.clone())
+    );
     let f = std::fs::File::open(&gitlab_file)?;
     let raw_yaml = serde_yaml::from_reader(f)?;
 
     let val: serde_yaml::Value = merge_keys_serde(raw_yaml).expect("Couldn't merge yaml :<<");
     let mut config = GitlabCIConfig {
+        file: gitlab_file.to_path_buf(),
         parent: None,
         stages: Vec::new(),
         variables: HashMap::new(),
@@ -157,7 +165,7 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
     };
 
     if let serde_yaml::Value::Mapping(map) = val {
-        info!("Parsing succesful.");
+        info!("Parsing {:?} succesful.", gitlab_file);
 
         if let Some(includes) = map.get(&Value::String("include".to_owned())) {
             config.parent = parse_includes(
@@ -168,9 +176,15 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
                 parent,
             )
             .map(Box::new);
+        } else {
+            config.parent = parent.map(Box::new)
         }
 
-        info!("All includes loaded.");
+        debug!(
+            "All includes loaded for {:?}. {:?}",
+            gitlab_file,
+            config.parent.as_ref().map(|p| p.file.clone())
+        );
 
         for (k, v) in map.iter() {
             if let Value::String(key) = k {
@@ -254,6 +268,8 @@ fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<R
 pub mod tests {
     use super::*;
     use std::path::PathBuf;
+    use tracing::Level;
+    use tracing_subscriber;
 
     #[test]
     pub fn parse_example() -> Result<(), DynErr> {
@@ -298,6 +314,8 @@ pub mod tests {
         let config = parse(&example_file)?;
         assert!(config.parent.is_some());
 
+        let globals = config.get_merged_variables();
+        assert!(globals.contains_key("GLOBAL_VAR"));
         Ok(())
     }
 
@@ -310,6 +328,39 @@ pub mod tests {
         let config = parse(&example_file)?;
         let vars = config.get_merged_variables();
         assert!(vars.contains_key("GLOBAL_VAR"));
+        Ok(())
+    }
+
+    #[test]
+    pub fn imports() -> Result<(), DynErr> {
+        let subscriber = tracing_subscriber::fmt()
+            // all spans/events with a level higher than TRACE (e.g, debug, info, warn, etc.)
+            // will be written to stdout.
+            .with_max_level(Level::TRACE)
+            // builds the subscriber.
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            let example_file: PathBuf = PathBuf::from(file!())
+                .parent()
+                .unwrap()
+                .join("../examples/imports/a.yml");
+            let config = parse(&example_file).unwrap();
+            let vars = config.get_merged_variables();
+
+            let mut parent = config.parent;
+            println!("file {:?}", config.file);
+            while let Some(par) = parent {
+                println!("parent {:?}", par.file);
+                parent = par.parent;
+            }
+
+            assert!(vars.contains_key("A"));
+            assert!(vars.contains_key("B"));
+            assert!(vars.contains_key("C"));
+            assert!(vars.contains_key("D"));
+            assert!(vars.contains_key("E"));
+        });
         Ok(())
     }
 }

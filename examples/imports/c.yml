@@ -1,0 +1,4 @@
+include:
+    - local: d.yml
+variables:
+  C: "SET"

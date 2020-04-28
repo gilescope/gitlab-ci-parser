@@ -1,0 +1,3 @@
+include: ../simple/.gitlab-ci.yml
+variables:
+  E: "SET"

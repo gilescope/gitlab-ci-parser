@@ -1,0 +1,6 @@
+include:
+  - local: d.yml
+  - local: e.yml
+
+variables:
+  B: "SET"
