@@ -223,44 +223,44 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
 #[tracing::instrument]
 fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<Rc<Job>, DynErr> {
     let job_nm = Value::String(job_name.to_owned());
-    let j: Result<Job, _> = serde_yaml::from_value(
-        top.get(&job_nm)
-            .expect(&format!(
-                "job asked to be parsed but not found: {}",
-                job_name
-            ))
-            .clone(),
-    );
-    if let Ok(mut j) = j {
-        if let Some(ref parent_job_name) = j.extends {
-            // Parse parents first so we don't get wicked fun with Rc<>...
+    if let Some(job) = top.get(&job_nm) {
+        let j: Result<Job, _> = serde_yaml::from_value(job.clone());
+        if let Ok(mut j) = j {
+            if let Some(ref parent_job_name) = j.extends {
+                // Parse parents first so we don't get wicked fun with Rc<>...
 
-            let job: Option<Rc<Job>> = if job_name != parent_job_name
-                && top.contains_key(&Value::String(parent_job_name.clone()))
-            {
-                parse_job(config, parent_job_name, top).ok()
-            } else {
-                let mut parent = config.parent.as_ref();
-                let mut result = None;
-                while parent.is_some() {
-                    result = parse_job(
-                        parent.expect("gitlab-ci file has no parent dir???"),
-                        parent_job_name,
-                        top,
-                    )
-                    .ok();
-                    if result.is_some() {
-                        break;
+                let job: Option<Rc<Job>> = if job_name != parent_job_name
+                    && top.contains_key(&Value::String(parent_job_name.clone()))
+                {
+                    parse_job(config, parent_job_name, top).ok()
+                } else {
+                    let mut parent = config.parent.as_ref();
+                    let mut result = None;
+                    while parent.is_some() {
+                        result = parse_job(
+                            parent.expect("gitlab-ci file has no parent dir???"),
+                            parent_job_name,
+                            top,
+                        )
+                        .ok();
+                        if result.is_some() {
+                            break;
+                        }
+                        parent = parent.expect("can't happen").parent.as_ref();
                     }
-                    parent = parent.expect("can't happen").parent.as_ref();
-                }
-                result
-            };
-            j.extends_job = job;
+                    result
+                };
+                j.extends_job = job;
+            }
+            Ok(Rc::new(j)) //TODO: maybe push rc outside here
+        } else {
+            Err(Box::new(j.unwrap_err()))
         }
-        Ok(Rc::new(j)) //TODO: maybe push rc outside here
     } else {
-        Err(Box::new(j.unwrap_err()))
+        Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Job not found",
+        )))
     }
 }
 
