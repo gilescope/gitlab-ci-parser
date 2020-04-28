@@ -77,6 +77,18 @@ impl GitlabCIConfig {
         results
     }
 
+    pub fn lookup_job(&self, job_name: &str) -> Option<Rc<Job>> {
+        if let Some(job) = self.jobs.get(job_name) {
+            Some(job.clone())
+        } else {
+            if let Some(parent) = &self.parent {
+                parent.lookup_job(job_name)
+            } else {
+                None
+            }
+        }
+    }
+
     fn calculate_variables(&self, mut variables: &mut HashMap<String, String>) {
         if let Some(ref parent) = self.parent {
             parent.calculate_variables(&mut variables);
@@ -220,6 +232,8 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
     Ok(config)
 }
 
+// When a file is loaded, all includes are imported, then all jobs, then
+// only then do we load the jobs of the file that included us.
 #[tracing::instrument]
 fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<Rc<Job>, DynErr> {
     let job_nm = Value::String(job_name.to_owned());
@@ -234,21 +248,22 @@ fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<R
                 {
                     parse_job(config, parent_job_name, top).ok()
                 } else {
-                    let mut parent = config.parent.as_ref();
-                    let mut result = None;
-                    while parent.is_some() {
-                        result = parse_job(
-                            parent.expect("gitlab-ci file has no parent dir???"),
-                            parent_job_name,
-                            top,
-                        )
-                        .ok();
-                        if result.is_some() {
-                            break;
-                        }
-                        parent = parent.expect("can't happen").parent.as_ref();
-                    }
-                    result
+                    config.lookup_job(parent_job_name)
+                    // let mut parent = config.parent.as_ref();
+                    // let mut result = None;
+                    // while parent.is_some() {
+                    //     result = parse_job(
+                    //         parent.expect("gitlab-ci file has no parent dir???"),
+                    //         parent_job_name,
+                    //         top,
+                    //     )
+                    //     .ok();
+                    //     if result.is_some() {
+                    //         break;
+                    //     }
+                    //     parent = parent.expect("can't happen").parent.as_ref();
+                    // }
+                    // result
                 };
                 j.extends_job = job;
             }
