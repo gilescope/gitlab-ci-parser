@@ -1,6 +1,6 @@
 [package]
 name = "gitlab_ci_parser"
-version = "0.0.4"
+version = "0.0.5"
 description = "A parser for .gitlab-ci.yml file format"
 authors = ["Giles Cope <gilescope@gmail.com>"]
 edition = "2018"

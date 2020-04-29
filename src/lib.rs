@@ -106,7 +106,13 @@ fn parse_includes(
     match include {
         Value::String(include_filename) => {
             // Remove leading '/' - join (correctly) won't concat them if filename starts from root.
-            let include_filename = context.join(&include_filename[1..]);
+            let ch = include_filename.chars().next().unwrap();
+            let include_filename = if ch == '/' || ch == '\\' {
+                include_filename[1..].to_owned()
+            } else {
+                include_filename.to_owned()
+            };
+            let include_filename = context.join(&include_filename);
             parse_aux(&context.join(&Path::new(&include_filename)), parent).ok()
         }
         Value::Sequence(includes) => {
