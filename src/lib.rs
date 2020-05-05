@@ -3,7 +3,7 @@ use serde_yaml::{Mapping, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use yaml_merge_keys::merge_keys_serde;
 
 pub type DynErr = Box<dyn std::error::Error + 'static>;
@@ -119,7 +119,14 @@ fn parse_includes(
             let mut parent = parent;
             for include in includes {
                 parent = parse_includes(context, include, parent);
-                debug!("parent returned {:?}", parent.as_ref().unwrap().file);
+                if let Some(ref parent) = parent {
+                    debug!("parent returned {:?}", &parent.file);
+                } else {
+                    error!(
+                        "no parent found when parsing {:?} - is it checked out in a sister dir?",
+                        &include
+                    );
+                }
             }
             parent
         }
