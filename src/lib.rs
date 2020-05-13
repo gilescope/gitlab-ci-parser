@@ -278,12 +278,18 @@ fn parse_value_as_strings(val: &Value) -> Option<Vec<String>> {
 fn parse_value_as_map(val: &Value) -> Option<BTreeMap<VarName, VarValue>> {
     match val {
         Value::Mapping(mapping) => {
-            let mut res = BTreeMap::new();
+            let mut res : BTreeMap<String, String> = BTreeMap::new();
 
             for (k, v) in mapping.iter() {
-                match (parse_value_as_string(k), parse_value_as_string(v)) {
-                    (Some(k), Some(v)) => {
-                        res.insert(k, v);
+                match (k, v) {
+                    (Value::String(k), Value::String(v)) => {
+                        res.insert(k.into(), v.to_string());
+                    }
+                    (Value::String(k), Value::Number(v)) => {
+                        res.insert(k.into(), v.to_string());
+                    }
+                    (Value::String(k), Value::Bool(v)) => {
+                        res.insert(k.into(), v.to_string());
                     }
                     _ => {
                         warn!("didn't understand {:?}={:?}", k, v);
