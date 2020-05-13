@@ -3,7 +3,7 @@ use serde_yaml::{Mapping, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use yaml_merge_keys::merge_keys_serde;
 
 pub type DynErr = Box<dyn std::error::Error + 'static>;
@@ -14,6 +14,9 @@ pub type VarName = String;
 pub type VarValue = String;
 pub type Script = String;
 
+/// A job is a unit of work in gitlab. They can inherit from
+/// multiple parents. A job consists of environment variables
+/// and a list of commands to run.
 /// All Jobs in the same stage tend to be run at once.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Job {
@@ -26,10 +29,11 @@ pub struct Job {
     /// (or globally)
     pub variables: Option<BTreeMap<VarName, VarValue>>,
 
-    pub extends: Option<JobName>,
+    pub extends: Option<Vec<JobName>>,
 
+    /// You can alas extend more than one job.
     #[serde(skip)]
-    pub extends_job: Option<Rc<Job>>,
+    pub extends_jobs: Vec<Rc<Job>>,
 }
 
 impl Job {
@@ -41,7 +45,7 @@ impl Job {
     }
 
     fn calculate_variables(&self, mut variables: &mut BTreeMap<String, String>) {
-        if let Some(ref parent) = self.extends_job {
+        for parent in &self.extends_jobs {
             parent.calculate_variables(&mut variables);
         }
         if let Some(ref var) = self.variables {
@@ -52,6 +56,11 @@ impl Job {
     }
 }
 
+/// This is a parsed GitLabCI config.
+/// GitLab is fairly imperative rather than declarative,
+/// in that if `script:` is defined in the map before `variables:`
+/// then any referenced variables are not set.
+/// (Feels like a bug to me, but that's how gitlab seems to interpret this case)
 #[derive(Debug)]
 pub struct GitlabCIConfig {
     pub file: PathBuf,
@@ -245,29 +254,107 @@ fn parse_aux(gitlab_file: &Path, parent: Option<GitlabCIConfig>) -> Result<Gitla
     Ok(config)
 }
 
+fn parse_value_as_string(val: &Value) -> Option<String> {
+    match val {
+        Value::String(ref result) => Some(result.clone()),
+        _ => None,
+    }
+}
+
+fn parse_value_as_strings(val: &Value) -> Option<Vec<String>> {
+    match val {
+        Value::String(result) => Some(vec![result.clone()]),
+        Value::Sequence(results) => Some(
+            results
+                .iter()
+                .map(parse_value_as_string)
+                .filter_map(|o| o)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+fn parse_value_as_map(val: &Value) -> Option<BTreeMap<VarName, VarValue>> {
+    match val {
+        Value::Mapping(mapping) => {
+            let mut res = BTreeMap::new();
+
+            for (k, v) in mapping.iter() {
+                match (parse_value_as_string(k), parse_value_as_string(v)) {
+                    (Some(k), Some(v)) => {
+                        res.insert(k, v);
+                    }
+                    _ => {
+                        warn!("didn't understand {:?}={:?}", k, v);
+                    }
+                };
+            }
+
+            Some(res)
+        }
+        _ => None,
+    }
+}
+
+fn parse_raw_job(yml: &Mapping) -> Result<Job, DynErr> {
+    let stage = yml
+        .get(&Value::String("stage".into()))
+        .map(parse_value_as_string)
+        .unwrap_or(None);
+    let before_script = yml
+        .get(&Value::String("before_script".into()))
+        .map(parse_value_as_strings)
+        .unwrap_or(None);
+    let script = yml
+        .get(&Value::String("script".into()))
+        .map(parse_value_as_strings)
+        .unwrap_or(None);
+    let extends = yml
+        .get(&Value::String("extends".into()))
+        .map(parse_value_as_strings)
+        .unwrap_or(None);
+    let variables = yml
+        .get(&Value::String("variables".into()))
+        .map(parse_value_as_map)
+        .unwrap_or(None);
+
+    Ok(Job {
+        stage,
+        before_script,
+        script,
+        variables,
+        extends,
+        extends_jobs: vec![],
+    })
+}
+
 // When a file is loaded, all includes are imported, then all jobs, then
 // only then do we load the jobs of the file that included us.
 #[tracing::instrument]
 fn parse_job(config: &GitlabCIConfig, job_name: &str, top: &Mapping) -> Result<Rc<Job>, DynErr> {
     let job_nm = Value::String(job_name.to_owned());
-    if let Some(job) = top.get(&job_nm) {
-        let j: Result<Job, _> = serde_yaml::from_value(job.clone());
+    if let Some(Value::Mapping(job)) = top.get(&job_nm) {
+        let j: Result<Job, _> = parse_raw_job(job);
         if let Ok(mut j) = j {
-            if let Some(ref parent_job_name) = j.extends {
+            if let Some(ref parent_job_names) = j.extends {
                 // Parse parents first so we don't get wicked fun with Rc<>...
-
-                let job: Option<Rc<Job>> = if job_name != parent_job_name
-                    && top.contains_key(&Value::String(parent_job_name.clone()))
-                {
-                    parse_job(config, parent_job_name, top).ok()
-                } else {
-                    config.lookup_job(parent_job_name)
-                };
-                j.extends_job = job;
+                for parent_job_name in parent_job_names {
+                    let job: Option<Rc<Job>> = if job_name != parent_job_name
+                        && top.contains_key(&Value::String(parent_job_name.clone()))
+                    {
+                        parse_job(config, parent_job_name, top).ok()
+                    } else {
+                        config.lookup_job(parent_job_name)
+                    };
+                    if let Some(parent) = job {
+                        j.extends_jobs.push(parent);
+                    }
+                }
             }
             Ok(Rc::new(j)) //TODO: maybe push rc outside here
         } else {
-            Err(Box::new(j.unwrap_err()))
+            Err(j.unwrap_err())
         }
     } else {
         Err(Box::new(std::io::Error::new(
@@ -302,13 +389,9 @@ pub mod tests {
         assert_eq!(config.stages.len(), 1);
 
         // Check jobs are linked up to their parents
-        let parent = config
-            .jobs
-            .get("tired_starlings")
-            .unwrap()
-            .extends_job
-            .as_ref()
-            .unwrap();
+        let job = config.jobs.get("tired_starlings").unwrap();
+
+        let parent = job.extends_jobs[0].as_ref();
         assert!(parent
             .variables
             .as_ref()

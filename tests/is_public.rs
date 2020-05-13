@@ -6,7 +6,7 @@ pub fn test() {
         before_script: None,
         script: None,
         extends: None,
-        extends_job: None,
+        extends_jobs: vec![],
         stage: None,
         variables: None,
     };
